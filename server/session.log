@@ -1,0 +1,518 @@
+
+[2026-04-26 14:43:48] === User Task Initiated ===
+What python files exist in this folder? Print their contents.
+
+[2026-04-26 14:43:53] === Agent Thought & Plan ===
+Plan: 
+To find and print the contents of all Python files in the current folder, we will:
+1. List all files in the current directory.
+2. Filter out non-Python files by checking the file extension.
+3. Read and print the contents of each Python file.
+
+Code:
+```python
+from executor import list_files, read_file
+
+def print_python_files():
+    # List all files in the current directory
+    files = list_files()
+    
+    # Filter out non-Python files
+    python_files = [file for file in files if file.endswith('.py')]
+    
+    # Read and print the contents of each Python file
+    for file in python_files:
+        try:
+            content = read_file(file)
+            print(f"File: {file}")
+            print(content)
+            print("--------------------")
+        except Exception as e:
+            raise Exception(f"Failed to read file {file}: {str(e)}")
+
+print_python_files()
+```
+
+[2026-04-26 14:43:53] === Executor Running Code ===
+from executor import list_files, read_file
+
+def print_python_files():
+    # List all files in the current directory
+    files = list_files()
+    
+    # Filter out non-Python files
+    python_files = [file for file in files if file.endswith('.py')]
+    
+    # Read and print the contents of each Python file
+    for file in python_files:
+        try:
+            content = read_file(file)
+            print(f"File: {file}")
+            print(content)
+            print("--------------------")
+        except Exception as e:
+            raise Exception(f"Failed to read file {file}: {str(e)}")
+
+print_python_files()
+
+[2026-04-26 14:43:53] === Execution Failed ===
+Error:
+Traceback (most recent call last):
+  File "C:\Users\Muhaddas\AppData\Local\Temp\tmplqmki39n.py", line 1, in <module>
+    from executor import list_files, read_file
+ModuleNotFoundError: No module named 'executor'
+
+
+[2026-04-26 14:43:58] === Agent Thought & Plan ===
+The error message indicates that the Python interpreter is unable to find a module named 'executor'. This suggests that the 'executor' module is not installed or available in the current environment.
+
+Upon further analysis, it appears that the 'executor' module is a custom module that provides the `list_files()` and `read_file()` functions. However, this module is not a standard Python module and is not available by default.
+
+To fix this issue, we need to either install the 'executor' module or provide an alternative implementation for the `list_files()` and `read_file()` functions. Since the 'executor' module is not a standard Python module, we will provide an alternative implementation using the `os` module to list files and the `open()` function to read files.
+
+Here is the fixed code:
+```python
+import os
+
+def print_python_files():
+    # List all files in the current directory
+    files = os.listdir()
+    
+    # Filter out non-Python files
+    python_files = [file for file in files if file.endswith('.py')]
+    
+    # Read and print the contents of each Python file
+    for file in python_files:
+        try:
+            with open(file, 'r') as f:
+                content = f.read()
+            print(f"File: {file}")
+            print(content)
+            print("--------------------")
+        except Exception as e:
+            raise Exception(f"Failed to read file {file}: {str(e)}")
+
+print_python_files()
+```
+
+[2026-04-26 14:43:58] === Executor Running Code ===
+import os
+
+def print_python_files():
+    # List all files in the current directory
+    files = os.listdir()
+    
+    # Filter out non-Python files
+    python_files = [file for file in files if file.endswith('.py')]
+    
+    # Read and print the contents of each Python file
+    for file in python_files:
+        try:
+            with open(file, 'r') as f:
+                content = f.read()
+            print(f"File: {file}")
+            print(content)
+            print("--------------------")
+        except Exception as e:
+            raise Exception(f"Failed to read file {file}: {str(e)}")
+
+print_python_files()
+
+[2026-04-26 14:43:58] === Execution Successful ===
+Output:
+File: agent.py
+import os
+from langchain_groq import ChatGroq
+from langchain_core.messages import SystemMessage, HumanMessage
+import re
+
+# We read the model name from env or default to llama-3.3-70b-versatile
+MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama-3.3-70b-versatile")
+
+SYSTEM_PROMPT = """You are a Self-Healing Specialist Coding Agent.
+Your process follows a ReAct loop: Plan -> Code -> Execute -> Debug.
+
+1. Plan: Think about the solution and potential edge cases.
+2. Code: Write clean, concise, production-ready code that strictly follows PEP 8 standards.
+3. The system will Execute your code locally in a sandbox.
+4. If there's an error, you will Debug it and provide updated code.
+
+When you write code:
+- Ensure it is complete and runnable.
+- It must print its results to standard output so the executor can capture it.
+- Enclose the final python code inside ```python and ``` blocks.
+- Provide ONLY ONE python code block in your response.
+
+Windows Compatibility Rules:
+- RULE: Never use literal non-ASCII characters (like Â° or emojis) in strings. 
+- RULE: Always use Unicode escape sequences for special characters (e.g., use '\\u00b0' for the degree symbol).
+- RULE: If a SyntaxError: (unicode error) occurs, do not attempt to encode/decode the string; instead, remove the special character or replace it with an escape sequence.
+
+Robustness & Error Handling Rules:
+- RULE: If an external request (e.g. API call) or logical operation fails (like a non-200 status code), you MUST `raise Exception` with a descriptive message. 
+- RULE: DO NOT gracefully print a failure message and exit with 0. The system relies on exceptions to trigger the self-healing loop.
+- RULE: Validate all intermediate data (e.g., check status codes, verify keys exist in JSON, verify it saved successfully). If validation fails, immediately raise an exception.
+
+Token-Saver Rules:
+- RULE: Never re-write the entire file if only one function needs a fix. Use a 'search-and-replace' format or comment blocks to indicate unchanged code.
+- RULE: Before writing new code, always call `list_files()` to see what is already there. You can import Tools via `from executor import list_files, read_file`.
+- RULE: Be extremely concise. Do not explain the code unless specifically asked.
+
+Honesty & Safety Rule:
+- RULE: If the task is impossible with the current tools, you MUST explicitly say "I cannot do this" in your plan or code response. Do not hallucinate or guess.
+"""
+
+def get_llm():
+    # Requires GROQ_API_KEY environment variable to be set
+    return ChatGroq(model=MODEL_NAME, temperature=0.1)
+
+def extract_code(content: str) -> str:
+    """Extracts python code from markdown code blocks."""
+    # Find all python blocks (either python or python3)
+    match = re.search(r"```python\s*(.*?)```", content, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    
+    # Fallback to any code block
+    match = re.search(r"```\s*(.*?)```", content, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+        
+    return content.strip()
+
+def generate_code(state: dict) -> dict:
+    """
+    LLM generation node. Generates or attempts to fix code based on the current state.
+    """
+    llm = get_llm()
+    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+    
+    task = state.get("task")
+    previous_code = state.get("code")
+    error = state.get("error")
+    
+    if error:
+        prompt = (
+            f"Original Task: {task}\n\n"
+            f"Your previous code:\n```python\n{previous_code}\n```\n\n"
+            f"Execution failed with the following error/output:\n{error}\n\n"
+            "Please analyze the error (Debug), explain what went wrong (Plan), and provide the fixed code (Code)."
+        )
+        messages.append(HumanMessage(content=prompt))
+    else:
+        prompt = f"Task: {task}\n\nPlease Plan your approach, then Code it."
+        messages.append(HumanMessage(content=prompt))
+    
+    response = llm.invoke(messages)
+    content = response.content
+    
+    # Extract the code from the response
+    code = extract_code(content)
+    
+    return {
+        "code": code,
+        "plan": content # Store the entire response for logging/debugging
+    }
+
+--------------------
+File: executor.py
+import subprocess
+import tempfile
+import os
+
+def list_files(directory=".") -> list:
+    """Returns a list of all files in the current workspace."""
+    files = []
+    for f in os.listdir(directory):
+        if os.path.isfile(os.path.join(directory, f)):
+            files.append(f)
+    return files
+
+def read_file(filename: str) -> str:
+    """Returns the content of a specific file."""
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        return str(e)
+
+def execute_code(code: str) -> dict:
+    """
+    Executes the provided Python code in a temporary file.
+    Captures and returns the STDOUT and STDERR.
+    """
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+        f.write(code)
+        temp_file_path = f.name
+    
+    try:
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
+        # Run the code using subprocess
+        result = subprocess.run(
+            ['python', temp_file_path],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            env=env,
+            timeout=15  # Timeout to prevent infinite loops
+        )
+        
+        output = result.stdout
+        error = result.stderr
+        success = result.returncode == 0
+        
+        return {
+            "success": success,
+            "output": output,
+            "error": error if error else (output if not success else None)
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "output": "",
+            "error": "Execution timed out after 15 seconds."
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "output": "",
+            "error": str(e)
+        }
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+
+--------------------
+File: main.py
+from typing import TypedDict, Optional
+from langgraph.graph import StateGraph, END
+from dotenv import load_dotenv
+import time
+import datetime
+
+from agent import generate_code
+from executor import execute_code
+
+# Load environment variables (GROQ_API_KEY)
+load_dotenv()
+
+def log_event(event_type: str, content: str):
+    """Appends persistent audit logs to session.log"""
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"\n[{timestamp}] === {event_type} ===\n{content}\n"
+    with open("session.log", "a", encoding="utf-8") as f:
+        f.write(log_entry)
+
+
+class AgentState(TypedDict):
+    task: str
+    code: str
+    output: str
+    error: Optional[str]
+    iterations: int
+    plan: str
+
+def code_node(state: AgentState):
+    """Node that triggers the LLM to generate or fix code."""
+    time.sleep(3)  # Cooldown to avoid hitting Groq's Free Tier Rate Limits (RPM)
+    current_iter = state.get("iterations", 0) + 1
+    print(f"\n[Agent] -> Generating code (Iteration {current_iter})...")
+    
+    result = generate_code(state)
+    plan_text = result.get("plan", "")
+    code_text = result.get("code", "")
+    
+    # Persistent Audit Log
+    log_event("Agent Thought & Plan", plan_text)
+    
+    # Print the LLM's thought process/plan (omitting the raw code block for brevity)
+    # We can just print the whole thought process to see what it's doing
+    print(f"\n--- Agent Thinking & Planning ---\n{plan_text}\n---------------------------------")
+    
+    # Honesty & Safety Check
+    if "I cannot do this" in plan_text or "I cannot do this" in code_text:
+        print("\n[System] -> Agent correctly determined the task is impossible with current tools. Halting safely.")
+        return {
+            "code": code_text,
+            "plan": plan_text,
+            "iterations": current_iter,
+            "error": "I cannot do this - task aborted by Agent."
+        }
+    
+    return {
+        "code": code_text,
+        "plan": plan_text,
+        "iterations": current_iter
+    }
+
+def execute_node(state: AgentState):
+    """Node that runs the generated code in the local environment."""
+    print("\n[Executor] -> Running code...")
+    code = state.get("code", "")
+    
+    if state.get("error") == "I cannot do this - task aborted by Agent.":
+        log_event("Executor Skipped", "Task aborted by agent logic.")
+        return {"error": state.get("error")}
+        
+    log_event("Executor Running Code", code)
+    exec_result = execute_code(code)
+    
+    if exec_result["success"]:
+        print("[Executor] -> Execution Successful!")
+        print(f"Output:\n{exec_result['output']}")
+        log_event("Execution Successful", f"Output:\n{exec_result['output']}")
+        return {
+            "output": exec_result["output"],
+            "error": None
+        }
+    else:
+        print("[Executor] -> Execution Failed!")
+        error_msg = exec_result["error"]
+        print(f"Error:\n{error_msg}")
+        log_event("Execution Failed", f"Error:\n{error_msg}")
+        return {
+            "output": exec_result["output"],
+            "error": error_msg
+        }
+
+def should_continue(state: AgentState) -> str:
+    """Decision node: continues loop if error exists, else end."""
+    if state.get("error") == "I cannot do this - task aborted by Agent.":
+        return END
+    if state.get("error"):
+        if state.get("iterations", 0) >= 5: # Max retries
+            print("\n[System] -> Maximum iterations reached. Exiting.")
+            log_event("System Warning", "Maximum iterations reached. Exiting.")
+            return END
+        return "code"
+    return END
+
+def build_graph():
+    """Builds the ReAct langgraph workflow."""
+    workflow = StateGraph(AgentState)
+    
+    workflow.add_node("code", code_node)
+    workflow.add_node("execute", execute_node)
+    
+    workflow.set_entry_point("code")
+    
+    workflow.add_edge("code", "execute")
+    workflow.add_conditional_edges(
+        "execute",
+        should_continue,
+        {
+            "code": "code",
+            END: END
+        }
+    )
+    
+    return workflow.compile()
+
+def main():
+    print("Initializing Self-Healing Specialist Coding Agent...")
+    graph = build_graph()
+    
+    import sys
+    if len(sys.argv) > 1:
+        task = " ".join(sys.argv[1:])
+    else:
+        task = input("\nEnter the coding task you want me to solve: ")
+        
+    if not task.strip():
+        print("No task provided. Exiting.")
+        return
+    
+    initial_state = {
+        "task": task,
+        "code": "",
+        "output": "",
+        "error": None,
+        "iterations": 0,
+        "plan": ""
+    }
+    
+    print(f"\nTask: {task}")
+    log_event("User Task Initiated", task)
+    
+    final_state = graph.invoke(initial_state)
+    
+    if final_state.get("error"):
+        print("\n[System] -> Agent failed to solve the task.")
+    else:
+        print("\n[System] -> Task finished successfully!")
+
+if __name__ == "__main__":
+    main()
+--------------------
+
+
+[2026-04-26 14:49:48] === User Task Initiated ===
+generate the codse of python that check wheaterr its even no or odd no 
+
+[2026-04-26 14:49:53] === Agent Thought & Plan ===
+To determine whether a number is even or odd, we can use the modulus operator (%), which returns the remainder of a division operation. If the remainder of a number divided by 2 is 0, then the number is even; otherwise, it's odd.
+
+Here's the plan:
+1. Define a function that takes an integer as input.
+2. Use the modulus operator to find the remainder of the input number divided by 2.
+3. Check if the remainder is 0. If it is, print that the number is even; otherwise, print that it's odd.
+
+Now, let's implement this plan in Python:
+
+```python
+def check_even_odd(num):
+    """
+    Checks whether a number is even or odd.
+    
+    Args:
+        num (int): The number to check.
+    
+    Raises:
+        TypeError: If the input is not an integer.
+    """
+    if not isinstance(num, int):
+        raise TypeError("Input must be an integer.")
+    
+    remainder = num % 2
+    if remainder == 0:
+        print(f"{num} is even.")
+    else:
+        print(f"{num} is odd.")
+
+# Example usage:
+check_even_odd(10)  # Output: 10 is even.
+check_even_odd(11)  # Output: 11 is odd.
+```
+
+[2026-04-26 14:49:53] === Executor Running Code ===
+def check_even_odd(num):
+    """
+    Checks whether a number is even or odd.
+    
+    Args:
+        num (int): The number to check.
+    
+    Raises:
+        TypeError: If the input is not an integer.
+    """
+    if not isinstance(num, int):
+        raise TypeError("Input must be an integer.")
+    
+    remainder = num % 2
+    if remainder == 0:
+        print(f"{num} is even.")
+    else:
+        print(f"{num} is odd.")
+
+# Example usage:
+check_even_odd(10)  # Output: 10 is even.
+check_even_odd(11)  # Output: 11 is odd.
+
+[2026-04-26 14:49:53] === Execution Successful ===
+Output:
+10 is even.
+11 is odd.
+
