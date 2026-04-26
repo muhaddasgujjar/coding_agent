@@ -3,6 +3,11 @@ from langgraph.graph import StateGraph, END
 from dotenv import load_dotenv
 import time
 import datetime
+import sys
+
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
 
 from agent import generate_code
 from executor import execute_code
@@ -10,13 +15,15 @@ from executor import execute_code
 # Load environment variables (GROQ_API_KEY)
 load_dotenv()
 
+# Initialize Rich Console natively
+console = Console()
+
 def log_event(event_type: str, content: str):
     """Appends persistent audit logs to session.log"""
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_entry = f"\n[{timestamp}] === {event_type} ===\n{content}\n"
     with open("session.log", "a", encoding="utf-8") as f:
         f.write(log_entry)
-
 
 class AgentState(TypedDict):
     task: str
@@ -28,9 +35,10 @@ class AgentState(TypedDict):
 
 def code_node(state: AgentState):
     """Node that triggers the LLM to generate or fix code."""
-    time.sleep(3)  # Cooldown to avoid hitting Groq's Free Tier Rate Limits (RPM)
+    # Cooldown to avoid hitting Groq's Free Tier Rate Limits (RPM)
+    time.sleep(3)  
+    
     current_iter = state.get("iterations", 0) + 1
-    print(f"\n[Agent] -> Generating code (Iteration {current_iter})...")
     
     result = generate_code(state)
     plan_text = result.get("plan", "")
@@ -39,13 +47,16 @@ def code_node(state: AgentState):
     # Persistent Audit Log
     log_event("Agent Thought & Plan", plan_text)
     
-    # Print the LLM's thought process/plan (omitting the raw code block for brevity)
-    # We can just print the whole thought process to see what it's doing
-    print(f"\n--- Agent Thinking & Planning ---\n{plan_text}\n---------------------------------")
+    # Render the LLM's thought process/plan beautifully using Rich Markdown Panels
+    console.print(Panel(
+        Markdown(plan_text), 
+        title=f"[bold green]Agent Planning (Iteration {current_iter})[/bold green]", 
+        border_style="green"
+    ))
     
     # Honesty & Safety Check
     if "I cannot do this" in plan_text or "I cannot do this" in code_text:
-        print("\n[System] -> Agent correctly determined the task is impossible with current tools. Halting safely.")
+        console.print("\n[bold red]System:[/bold red] Agent correctly determined the task is impossible with current tools. Halting safely.")
         return {
             "code": code_text,
             "plan": plan_text,
@@ -61,7 +72,6 @@ def code_node(state: AgentState):
 
 def execute_node(state: AgentState):
     """Node that runs the generated code in the local environment."""
-    print("\n[Executor] -> Running code...")
     code = state.get("code", "")
     
     if state.get("error") == "I cannot do this - task aborted by Agent.":
@@ -72,17 +82,30 @@ def execute_node(state: AgentState):
     exec_result = execute_code(code)
     
     if exec_result["success"]:
-        print("[Executor] -> Execution Successful!")
-        print(f"Output:\n{exec_result['output']}")
+        output_msg = exec_result['output']
+        
+        # Display success safely in a blue panel
+        console.print(Panel(
+            output_msg if output_msg.strip() else "Code executed silently successfully.", 
+            title="[bold blue]Executor: Success[/bold blue]", 
+            border_style="blue"
+        ))
+        
         log_event("Execution Successful", f"Output:\n{exec_result['output']}")
         return {
             "output": exec_result["output"],
             "error": None
         }
     else:
-        print("[Executor] -> Execution Failed!")
         error_msg = exec_result["error"]
-        print(f"Error:\n{error_msg}")
+        
+        # Display errors boldly in a red panel
+        console.print(Panel(
+            error_msg, 
+            title="[bold red]Executor: Failed[/bold red]", 
+            border_style="red"
+        ))
+        
         log_event("Execution Failed", f"Error:\n{error_msg}")
         return {
             "output": exec_result["output"],
@@ -93,9 +116,10 @@ def should_continue(state: AgentState) -> str:
     """Decision node: continues loop if error exists, else end."""
     if state.get("error") == "I cannot do this - task aborted by Agent.":
         return END
+    
     if state.get("error"):
         if state.get("iterations", 0) >= 5: # Max retries
-            print("\n[System] -> Maximum iterations reached. Exiting.")
+            console.print("\n[bold red]System:[/bold red] Maximum iterations reached. Exiting Loop.")
             log_event("System Warning", "Maximum iterations reached. Exiting.")
             return END
         return "code"
@@ -104,56 +128,56 @@ def should_continue(state: AgentState) -> str:
 def build_graph():
     """Builds the ReAct langgraph workflow."""
     workflow = StateGraph(AgentState)
-    
     workflow.add_node("code", code_node)
     workflow.add_node("execute", execute_node)
-    
     workflow.set_entry_point("code")
-    
     workflow.add_edge("code", "execute")
-    workflow.add_conditional_edges(
-        "execute",
-        should_continue,
-        {
-            "code": "code",
-            END: END
-        }
-    )
-    
+    workflow.add_conditional_edges("execute", should_continue, {"code": "code", END: END})
     return workflow.compile()
 
 def main():
-    print("Initializing Self-Healing Specialist Coding Agent...")
     graph = build_graph()
     
-    import sys
-    if len(sys.argv) > 1:
-        task = " ".join(sys.argv[1:])
-    else:
-        task = input("\nEnter the coding task you want me to solve: ")
-        
-    if not task.strip():
-        print("No task provided. Exiting.")
-        return
+    # Title Display
+    console.print(Panel(
+        "[bold magenta]Self-Healing Specialist Coding Agent[/bold magenta]\n[dim]Interactive Mode (Type 'exit' to quit)[/dim]", 
+        border_style="magenta"
+    ))
     
-    initial_state = {
-        "task": task,
-        "code": "",
-        "output": "",
-        "error": None,
-        "iterations": 0,
-        "plan": ""
-    }
-    
-    print(f"\nTask: {task}")
-    log_event("User Task Initiated", task)
-    
-    final_state = graph.invoke(initial_state)
-    
-    if final_state.get("error"):
-        print("\n[System] -> Agent failed to solve the task.")
-    else:
-        print("\n[System] -> Task finished successfully!")
+    while True:
+        try:
+            # Persistent interactive cursor!
+            task = console.input("\n[bold cyan]You:[/bold cyan] ")
+            
+            if task.lower() in ['exit', 'quit']:
+                console.print("[dim]Goodbye![/dim]")
+                break
+                
+            if not task.strip():
+                continue
+                
+            initial_state = {
+                "task": task,
+                "code": "",
+                "output": "",
+                "error": None,
+                "iterations": 0,
+                "plan": ""
+            }
+            
+            log_event("User Task Initiated", task)
+            
+            # The spinner runs seamlessly over the entirety of the graph invoke wrapper
+            with console.status("[bold green]Agent is thinking...[/bold green]", spinner="dots"):
+                final_state = graph.invoke(initial_state)
+            
+            if final_state.get("error"):
+                console.print("\n[bold yellow]Task finished with errors or warnings.[/bold yellow]")
+            else:
+                console.print("\n[bold green]\u2714 Task finished successfully![/bold green]")
+                
+        except KeyboardInterrupt:
+            console.print("\n[dim]Session interrupted. Type 'exit' to gracefully quit.[/dim]")
 
 if __name__ == "__main__":
     main()
