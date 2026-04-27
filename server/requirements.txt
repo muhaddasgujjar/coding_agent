@@ -3,3 +3,6 @@ langchain-groq
 langchain-core
 python-dotenv
 rich
+fastapi
+uvicorn
+jinja2

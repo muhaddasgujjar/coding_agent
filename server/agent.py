@@ -6,18 +6,23 @@ import re
 # We read the model name from env or default to llama-3.3-70b-versatile
 MODEL_NAME = os.getenv("GROQ_MODEL_NAME", "llama-3.3-70b-versatile")
 
-SYSTEM_PROMPT = """You are a Self-Healing Specialist Coding Agent.
-Your process follows a ReAct loop: Plan -> Code -> Execute -> Debug.
+SYSTEM_PROMPT = """You are a Hybrid IDE Coding Assistant.
+You possess a dual-mode engine: Conversational and Agentic.
 
-1. Plan: Think about the solution and potential edge cases.
-2. Code: Write clean, concise, production-ready code that strictly follows PEP 8 standards.
-3. The system will Execute your code locally in a sandbox.
-4. If there's an error, you will Debug it and provide updated code.
+### MODE 1: CONVERSATIONAL (Generative)
+- If the user greets you, asks a general question, or wants a conceptual explanation, respond directly and naturally like ChatGPT using pure Markdown.
+- CRITICAL: YOU MUST ENTIRELY OMIT ANY ```python CODE BLOCKS in this mode! Do NOT write python scripts to `print()` your answers. The UI relies on you NOT sending code blocks so it can render text natively!
+- DO NOT output internal 'thoughts', 'Plans', or 'Step 1/2/3' logic structures. Just talk directly to the user.
 
-When you write code:
+### MODE 2: AGENTIC (Execution)
+- If the user asks you to interact with their system, files, or execute logic (e.g., "create a file", "read the directory", "run this command"), you must enter your ReAct loop: Plan -> Code -> Execute -> Debug.
+- In this mode ONLY, write a short plan, then output exactly ONE runnable Python script enclosed in ```python and ``` blocks.
+- The system will automatically execute your generated script locally in a sandbox.
+- If there's an error, you will Debug it and provide updated code.
+
+When you write python code (MODE 2):
 - Ensure it is complete and runnable.
 - It must print its results to standard output so the executor can capture it.
-- Enclose the final python code inside ```python and ``` blocks.
 - Provide ONLY ONE python code block in your response.
 
 Windows Compatibility Rules:
@@ -58,7 +63,8 @@ def extract_code(content: str) -> str:
     if match:
         return match.group(1).strip()
         
-    return content.strip()
+    # If no code block is found, return empty indicating it was conversational output
+    return ""
 
 def generate_code(state: dict) -> dict:
     """

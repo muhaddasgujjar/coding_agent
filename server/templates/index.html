@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cursor MVP - Coding Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1e1e1e; color: #d4d4d4;}
+        #editor { width: 100%; height: 100%; }
+        /* Scrollbar styles for chat */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e1e1e; }
+        ::-webkit-scrollbar-thumb { background: #424242; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4f4f4f; }
+        
+        /* Message styles */
+        .msg-user { background-color: #2b2d31; border-left: 3px solid #5865F2;}
+        .msg-agent { background-color: #1e1f22; border-left: 3px solid #23a559;}
+        .msg-error { background-color: #3f1c1c; border-left: 3px solid #da373c;}
+    </style>
+</head>
+<body class="flex h-screen w-screen text-gray-300 font-sans">
+    
+    <!-- LEFT PANE: Chatbot View -->
+    <div class="w-1/3 h-full flex flex-col bg-[#2b2d31] border-r border-gray-800">
+        <div class="p-4 border-b border-gray-800 bg-[#1e1f22] select-none font-semibold flex justify-between items-center">
+            <span>Agent Chat</span>
+            <span class="text-green-500 text-xs px-2 py-1 bg-green-900 rounded opacity-80" id="status-indicator">Ready</span>
+        </div>
+        
+        <!-- Chat History -->
+        <div id="chat-history" class="flex-grow overflow-y-auto p-4 flex flex-col gap-4">
+            <div class="msg-agent p-3 rounded shadow-sm text-sm">
+                <span class="font-bold text-gray-100 block mb-1">System</span>
+                Welcome to your IDE. What can I build for you today?
+            </div>
+        </div>
+
+        <!-- Chat Input -->
+        <div class="p-4 bg-[#1e1f22] border-t border-gray-800">
+            <form id="chat-form" class="flex flex-col gap-2">
+                <textarea id="prompt-input" rows="3" class="w-full bg-[#383a40] text-gray-200 border-none rounded p-3 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none shadow-inner" placeholder="Ask the agent to code something... (Enter to send)"></textarea>
+                <div class="flex justify-end pt-1">
+                    <button type="submit" id="send-btn" class="bg-[#5865F2] hover:bg-[#4752c4] text-white px-5 py-1.5 rounded transition font-medium text-sm disabled:opacity-50">
+                        Send Prompt
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- RIGHT PANE: Monaco IDE View -->
+    <div class="w-2/3 h-full flex flex-col bg-[#1e1e1e]">
+        <div class="px-4 py-2 text-sm text-gray-400 font-mono border-b border-gray-800 bg-[#1e1e1e]">
+            > workspace_viewer (Monaco Editor)
+        </div>
+        <div id="editor" class="flex-grow"></div>
+    </div>
+
+    <!-- Require Monaco loader -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs/loader.min.js"></script>
+    <script>
+        // Init Monaco Editor
+        let editor;
+        require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs' }});
+        require(['vs/editor/editor.main'], function() {
+            editor = monaco.editor.create(document.getElementById('editor'), {
+                value: "# Your code output will appear here automatically.\n\n",
+                language: 'python',
+                theme: 'vs-dark',
+                automaticLayout: true,
+                minimap: { enabled: false },
+                fontSize: 14,
+                wordWrap: 'on'
+            });
+        });
+
+        // Chat Logic
+        const chatForm = document.getElementById('chat-form');
+        const promptInput = document.getElementById('prompt-input');
+        const chatHistory = document.getElementById('chat-history');
+        const sendBtn = document.getElementById('send-btn');
+        const statusIndicator = document.getElementById('status-indicator');
+
+        promptInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                chatForm.dispatchEvent(new Event('submit'));
+            }
+        });
+
+        function appendMessage(sender, text, type="agent") {
+            const div = document.createElement('div');
+            let cssClass = type === "user" ? "msg-user" : (type === "error" ? "msg-error" : "msg-agent");
+            div.className = `${cssClass} p-3 rounded shadow-sm text-sm break-words whitespace-pre-wrap`;
+            div.innerHTML = `<span class="font-bold text-gray-100 block mb-1">${sender}</span>${text}`;
+            chatHistory.appendChild(div);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const prompt = promptInput.value.trim();
+            if (!prompt) return;
+
+            // Submit UX
+            appendMessage("You", prompt, "user");
+            promptInput.value = '';
+            sendBtn.disabled = true;
+            statusIndicator.textContent = "Agent Thinking...";
+            statusIndicator.className = "text-yellow-500 text-xs px-2 py-1 bg-yellow-900 rounded opacity-80 animate-pulse";
+            
+            // Get current editor state to pass as context
+            const currentCode = editor ? editor.getValue() : "";
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: prompt, code: currentCode })
+                });
+
+                const data = await response.json();
+                
+                if (data.plan) {
+                    appendMessage("Agent Task Summary", data.plan, "agent");
+                }
+                
+                if (data.code && editor) {
+                    editor.setValue(data.code);
+                }
+
+                if (data.error) {
+                    appendMessage("Execution Failed", `${data.error}\n\nOutput: ${data.output}`, "error");
+                } else if (data.output) {
+                    appendMessage("Execution Output", data.output, "agent");
+                } else {
+                    appendMessage("Agent", "Finished processing cleanly.", "agent");
+                }
+
+            } catch (err) {
+                appendMessage("System Error", err.message, "error");
+            } finally {
+                sendBtn.disabled = false;
+                statusIndicator.textContent = "Ready";
+                statusIndicator.className = "text-green-500 text-xs px-2 py-1 bg-green-900 rounded opacity-80";
+                promptInput.focus();
+            }
+        });
+    </script>
+</body>
+</html>

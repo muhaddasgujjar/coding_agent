@@ -1,25 +1,32 @@
-from typing import TypedDict, Optional
-from langgraph.graph import StateGraph, END
-from dotenv import load_dotenv
-import time
-import datetime
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
+import threading
+import os
 import sys
-
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
+import datetime
+import webbrowser
+import tkinter as tk
+from tkinter import filedialog
 
 from agent import generate_code
 from executor import execute_code
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, Optional
 
-# Load environment variables (GROQ_API_KEY)
+from dotenv import load_dotenv
 load_dotenv()
 
-# Initialize Rich Console natively
-console = Console()
+app = FastAPI()
+
+# Make sure templates dir exists
+os.makedirs("templates", exist_ok=True)
+templates = Jinja2Templates(directory="templates")
 
 def log_event(event_type: str, content: str):
-    """Appends persistent audit logs to session.log"""
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_entry = f"\n[{timestamp}] === {event_type} ===\n{content}\n"
     with open("session.log", "a", encoding="utf-8") as f:
@@ -33,151 +40,155 @@ class AgentState(TypedDict):
     iterations: int
     plan: str
 
+# ReAct Logic Node Wrappers
 def code_node(state: AgentState):
-    """Node that triggers the LLM to generate or fix code."""
-    # Cooldown to avoid hitting Groq's Free Tier Rate Limits (RPM)
-    time.sleep(3)  
-    
     current_iter = state.get("iterations", 0) + 1
-    
     result = generate_code(state)
     plan_text = result.get("plan", "")
     code_text = result.get("code", "")
     
-    # Persistent Audit Log
     log_event("Agent Thought & Plan", plan_text)
     
-    # Render the LLM's thought process/plan beautifully using Rich Markdown Panels
-    console.print(Panel(
-        Markdown(plan_text), 
-        title=f"[bold green]Agent Planning (Iteration {current_iter})[/bold green]", 
-        border_style="green"
-    ))
-    
-    # Honesty & Safety Check
     if "I cannot do this" in plan_text or "I cannot do this" in code_text:
-        console.print("\n[bold red]System:[/bold red] Agent correctly determined the task is impossible with current tools. Halting safely.")
-        return {
-            "code": code_text,
-            "plan": plan_text,
-            "iterations": current_iter,
-            "error": "I cannot do this - task aborted by Agent."
-        }
+        return {"code": code_text, "plan": plan_text, "iterations": current_iter, "error": "I cannot do this - task aborted by Agent."}
     
-    return {
-        "code": code_text,
-        "plan": plan_text,
-        "iterations": current_iter
-    }
+    return {"code": code_text, "plan": plan_text, "iterations": current_iter}
 
 def execute_node(state: AgentState):
-    """Node that runs the generated code in the local environment."""
     code = state.get("code", "")
-    
     if state.get("error") == "I cannot do this - task aborted by Agent.":
-        log_event("Executor Skipped", "Task aborted by agent logic.")
         return {"error": state.get("error")}
         
     log_event("Executor Running Code", code)
     exec_result = execute_code(code)
     
     if exec_result["success"]:
-        output_msg = exec_result['output']
-        
-        # Display success safely in a blue panel
-        console.print(Panel(
-            output_msg if output_msg.strip() else "Code executed silently successfully.", 
-            title="[bold blue]Executor: Success[/bold blue]", 
-            border_style="blue"
-        ))
-        
         log_event("Execution Successful", f"Output:\n{exec_result['output']}")
-        return {
-            "output": exec_result["output"],
-            "error": None
-        }
+        return {"output": exec_result["output"], "error": None}
     else:
-        error_msg = exec_result["error"]
-        
-        # Display errors boldly in a red panel
-        console.print(Panel(
-            error_msg, 
-            title="[bold red]Executor: Failed[/bold red]", 
-            border_style="red"
-        ))
-        
-        log_event("Execution Failed", f"Error:\n{error_msg}")
-        return {
-            "output": exec_result["output"],
-            "error": error_msg
-        }
+        log_event("Execution Failed", f"Error:\n{exec_result['error']}")
+        return {"output": exec_result["output"], "error": exec_result["error"]}
 
 def should_continue(state: AgentState) -> str:
-    """Decision node: continues loop if error exists, else end."""
     if state.get("error") == "I cannot do this - task aborted by Agent.":
         return END
-    
     if state.get("error"):
-        if state.get("iterations", 0) >= 5: # Max retries
-            console.print("\n[bold red]System:[/bold red] Maximum iterations reached. Exiting Loop.")
-            log_event("System Warning", "Maximum iterations reached. Exiting.")
+        if state.get("iterations", 0) >= 3:
             return END
         return "code"
     return END
 
-def build_graph():
-    """Builds the ReAct langgraph workflow."""
-    workflow = StateGraph(AgentState)
-    workflow.add_node("code", code_node)
-    workflow.add_node("execute", execute_node)
-    workflow.set_entry_point("code")
-    workflow.add_edge("code", "execute")
-    workflow.add_conditional_edges("execute", should_continue, {"code": "code", END: END})
-    return workflow.compile()
+def needs_execution(state: AgentState) -> str:
+    code_text = state.get("code", "")
+    if state.get("error") == "I cannot do this - task aborted by Agent.":
+        return END
+    
+    # Dual-Mode Routing: If the agent didn't write an executable python script,
+    # we assume it is just having a direct generative conversation with the user.
+    if not code_text or code_text.strip() == "":
+        return END
+        
+    return "execute"
+
+workflow = StateGraph(AgentState)
+workflow.add_node("code", code_node)
+workflow.add_node("execute", execute_node)
+workflow.set_entry_point("code")
+# Use a conditional edge right out of the LLM node to skip execution if it's just chat
+workflow.add_conditional_edges("code", needs_execution, {"execute": "execute", END: END})
+workflow.add_conditional_edges("execute", should_continue, {"code": "code", END: END})
+graph = workflow.compile()
+
+class ChatRequest(BaseModel):
+    prompt: str
+    code: str
+
+@app.get("/api/choose-workspace")
+def choose_workspace():
+    def ask():
+        root = tk.Tk()
+        root.withdraw()
+        root.lift()
+        root.attributes('-topmost', True)
+        path = filedialog.askdirectory(title="Select a Workspace Folder")
+        root.destroy()
+        return path
+        
+    path = ask()
+    if path and os.path.isdir(path):
+        os.chdir(path)
+        return {"success": True, "path": path}
+    
+    return {"success": False}
+
+@app.get("/api/files")
+async def list_files():
+    allowed = ['.py', '.json', '.txt', '.md', '.html', '.css', '.js', '.env', '.jsx', '.ts', '.tsx', '.csv', '.yml']
+    files = []
+    for root, dirs, filenames in os.walk("."):
+        # Ignore heavy system/dependency folders
+        dirs[:] = [d for d in dirs if d not in ['.venv', 'venv', 'node_modules', '.git', '__pycache__', 'dist', 'build']]
+        for f in filenames:
+            if any(f.endswith(ext) for ext in allowed):
+                full_path = os.path.join(root, f)
+                rel_path = os.path.relpath(full_path, ".")
+                # Send standardized relative paths cleanly
+                files.append(rel_path.replace("\\", "/"))
+    return {"files": sorted(files)}
+
+@app.get("/api/file")
+async def get_file(name: str):
+    if not os.path.exists(name):
+        return {"content": ""}
+    with open(name, "r", encoding="utf-8", errors="replace") as f:
+        return {"content": f.read()}
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    initial_state = {
+        "task": req.prompt,
+        "code": req.code,
+        "output": "",
+        "error": None,
+        "iterations": 0,
+        "plan": ""
+    }
+    
+    log_event("User Web Prompt", req.prompt)
+    final_state = graph.invoke(initial_state)
+    
+    return {
+        "plan": final_state.get("plan"),
+        "code": final_state.get("code"),
+        "output": final_state.get("output"),
+        "error": final_state.get("error")
+    }
+
+def start_server():
+    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="error")
 
 def main():
-    graph = build_graph()
+    print("Launching Desktop IDE Window...")
     
-    # Title Display
-    console.print(Panel(
-        "[bold magenta]Self-Healing Specialist Coding Agent[/bold magenta]\n[dim]Interactive Mode (Type 'exit' to quit)[/dim]", 
-        border_style="magenta"
-    ))
+    # Start the fastAPI backend simultaneously on a daemon thread
+    t = threading.Thread(target=start_server)
+    t.daemon = True
+    t.start()
     
-    while True:
-        try:
-            # Persistent interactive cursor!
-            task = console.input("\n[bold cyan]You:[/bold cyan] ")
-            
-            if task.lower() in ['exit', 'quit']:
-                console.print("[dim]Goodbye![/dim]")
-                break
-                
-            if not task.strip():
-                continue
-                
-            initial_state = {
-                "task": task,
-                "code": "",
-                "output": "",
-                "error": None,
-                "iterations": 0,
-                "plan": ""
-            }
-            
-            log_event("User Task Initiated", task)
-            
-            # The spinner runs seamlessly over the entirety of the graph invoke wrapper
-            with console.status("[bold green]Agent is thinking...[/bold green]", spinner="dots"):
-                final_state = graph.invoke(initial_state)
-            
-            if final_state.get("error"):
-                console.print("\n[bold yellow]Task finished with errors or warnings.[/bold yellow]")
-            else:
-                console.print("\n[bold green]\u2714 Task finished successfully![/bold green]")
-                
-        except KeyboardInterrupt:
-            console.print("\n[dim]Session interrupted. Type 'exit' to gracefully quit.[/dim]")
+    # Let server boot
+    import time
+    time.sleep(2)
+    
+    # Boot the UI wrapper
+    # We no longer launch the browser for FastAPI because Vite dev server handles it.
+    print("Vite handles the UI now via proxy on port 5173.")
+    
+    # Keep main thread alive
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Shutting down...")
 
 if __name__ == "__main__":
     main()

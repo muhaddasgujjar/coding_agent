@@ -52,6 +52,15 @@ def execute_code(code: str) -> dict:
     try:
         env = os.environ.copy()
         env['PYTHONIOENCODING'] = 'utf-8'
+        
+        # Inject the core server directory into PYTHONPATH so the agent can ALWAYS import 'executor'
+        # no matter what workspace folder the user shifts into dynamically!
+        server_dir = os.path.dirname(os.path.abspath(__file__))
+        if 'PYTHONPATH' in env:
+            env['PYTHONPATH'] = f"{server_dir}{os.pathsep}{env['PYTHONPATH']}"
+        else:
+            env['PYTHONPATH'] = server_dir
+
         # Run the code using subprocess
         result = subprocess.run(
             ['python', temp_file_path],
